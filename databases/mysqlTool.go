@@ -1,6 +1,7 @@
 package dbs
 
 import (
+	tools "autolike/Tools"
 	"context"
 	"database/sql"
 	"fmt"
@@ -80,7 +81,7 @@ func init() {
 
 		// And now we can use our new driver with the regular mysql connection string tunneled through the SSH connection
 		if DB, err = sql.Open("mysql", fmt.Sprintf("%s:%s@mysql+tcp(%s)/%s", dbUser, dbPass, dbHost, dbName)); err == nil {
-			DB.SetMaxOpenConns(1024)
+			DB.SetMaxOpenConns(512)
 			DB.SetMaxIdleConns(100)
 			fmt.Printf("Successfully connected to the db\n")
 
@@ -217,17 +218,10 @@ type CatLikeNum struct {
 }
 
 type NewTimeRecord struct {
-	Id          int    `json:"id"`
-	FirstClass  string `json:"first_class"`
-	SecondClass string `json:"second_class"`
-	RecordJson  string `json:"record_json"`
-	UserId      int    `json:"user_id"`
-	TimeCatId   int    `json:"time_cat_id"`
-	CreatedTs   string `json:"created_ts"`
-	UpdatedTs   string `json:"updated_ts"`
-	TimeCatName string `json:"time_cat_name"`
-	HasImg      int    `json:"has_img"`
-	LikeNum     int    `json:"like_num"`
+	Id        int `json:"id"`
+	UserId    int `json:"user_id"`
+	TimeCatId int `json:"time_cat_id"`
+	LikeNum   int `json:"like_num"`
 }
 
 type CatMoodUserLikeRelation struct {
@@ -260,5 +254,120 @@ type TimeCat struct {
 }
 
 func (r *NewTimeRecord) RootTask() {
+	total := tools.TotalRandom()
+	times := tools.TimesRandom()
+	totalTime := tools.TotalTime()
+	start := 0
+	sum := 0
+	for num := 0; sum < total; sum = sum + num {
+		num = tools.CountRandom(total, times)
+		start = tools.AfterTime(start, totalTime)
+		go AutoLike(start, num, r)
+	}
+}
 
+func AutoLike(after, num int, r *NewTimeRecord) {
+	for {
+		select {
+		case <-time.After(time.Second * time.Duration(after)):
+			fmt.Println(num)
+			userIds := RandomUser(num)
+			InsertIfNotExist(userIds, r)
+		}
+		time.Sleep(time.Second * 5)
+	}
+}
+
+type UserInfo struct {
+	Id                int         `json:"id"`
+	NickName          string      `json:"nick_name"`
+	Gender            int         `json:"gender"`
+	Country           string      `json:"country"`
+	Province          string      `json:"province"`
+	City              string      `json:"city"`
+	Language          string      `json:"language"`
+	Phone             interface{} `json:"phone"`
+	Headimgurl        interface{} `json:"headimgurl"`
+	CreatedTs         string      `json:"created_ts"`
+	UpdatedTs         string      `json:"updated_ts"`
+	EmergencyContacts interface{} `json:"emergency_contacts"`
+	MembershipEndDate string      `json:"membership_end_date"`
+}
+
+func RandomUser(num int) []int {
+	//	select ename,job from emp order by rand() limit 5;
+	userIds := make([]int, num)
+	if rows, err := DB.Query("select id from user_info order by rand() limit ?", num); err == nil {
+		for rows.Next() {
+			var userId int
+			err = rows.Scan(&userId)
+			if err == nil {
+				userIds = append(userIds, userId)
+				//DB.Exec()
+			} else {
+				fmt.Println(err)
+			}
+		}
+	} else {
+		fmt.Println(err)
+	}
+	return userIds
+}
+
+func GetCatId(timeCatId int) int {
+	var tID int
+	if row, err := DB.Query("select cat_id from time_cat where id = ?", timeCatId); err == nil {
+		for row.Next() {
+			row.Scan(&tID)
+			return tID
+		}
+	} else {
+		fmt.Println("GetCatId error", err)
+	}
+	return tID
+}
+
+func InsertIfNotExist(userIds []int, r *NewTimeRecord) {
+	catId := GetCatId(r.TimeCatId)
+	for _, userId := range userIds {
+		if result, err := DB.Exec("INSERT INTO cat_mood_user_like_relation (mood_id, user_id, cat_id) SELECT ?,?,?  from DUAL where not exists(select mood_id from cat_mood_user_like_relation where mood_id = ? and user_id = ?)", r.Id, userId, catId, r.Id, userId); err == nil {
+			fmt.Println(result.LastInsertId())
+		} else {
+			fmt.Println("InsertIfNotExist error", err)
+		}
+	}
+	RecordLikeNum(r)
+	CatLikeNumUpdate(catId)
+}
+
+func RecordLikeNum(r *NewTimeRecord) {
+	var count int
+	if row, err := DB.Query("select count(user_id) from cat_mood_user_like_relation where mood_id = ?", r.Id); err == nil {
+		for row.Next() {
+			row.Scan(&count)
+			if ret, err := DB.Exec("update new_timer_record set like_num = ? where id = ?", count, r.Id); err == nil {
+				fmt.Println(ret)
+			} else {
+				fmt.Println("RecordLikeNum Insert", err)
+			}
+		}
+	} else {
+		fmt.Println("RecordLikeNum", err)
+	}
+}
+
+func CatLikeNumUpdate(catId int) {
+	var count int
+	if row, err := DB.Query("select count(user_id) from cat_mood_user_like_relation where cat_id = ?", catId); err == nil {
+		for row.Next() {
+			row.Scan(&count)
+			if result, err := DB.Exec("update cat_like_num set num = ? where cat_id = ?", count, catId); err == nil {
+				fmt.Println(result)
+			} else {
+				fmt.Println("CatLikeNumUpdate update", err)
+			}
+		}
+	} else {
+		fmt.Println("CatLikeNumUpdate", err)
+	}
 }
